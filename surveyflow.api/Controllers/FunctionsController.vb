@@ -247,8 +247,7 @@ Public Class FunctionsController
     ' Body shape (from SurveyDistribute.jsx):
     '   { survey_id, subject_template?, body_template? }
     '
-    ' Both templates support {{survey_title}}, {{recipient_email}},
-    ' {{survey_link}} placeholders. The "pending" status (never sent) is
+    ' Both templates support the merge tags in Services\MergeTags.vb. The "pending" status (never sent) is
     ' skipped — reminders only go to people who already received an invite.
     <HttpPost, Route("functions/sendScheduledReminders"), Authorize>
     Public Async Function SendScheduledReminders(<FromBody> req As JObject) As Task(Of IHttpActionResult)
@@ -285,20 +284,27 @@ Public Class FunctionsController
             })
         End If
 
-        ' Fetch eligible invites (sent / opened / started — not pending, not completed).
-        Dim invites As New List(Of (id As String, email As String, token As String))
+        ' Fetch eligible invites (sent / opened / started — not pending, not
+        ' completed) with everything the merge tags need.
+        Dim invites As New List(Of (Id As String, Token As String, R As MergeTags.Recipient))
         Using conn = Db.Open()
             Using cmd = conn.CreateCommand()
                 cmd.CommandText = "
-                    SELECT id, email, token
+                    SELECT id, email, token, first_name, last_name, company, custom_id, [password], respondent_id, custom_json
                     FROM dbo.SurveyInvites
                     WHERE survey_id = @sid
                       AND status NOT IN ('pending', 'completed')
                       AND email IS NOT NULL"
                 cmd.Parameters.Add(New SqlParameter("@sid", SqlDbType.Char, 36) With {.Value = surveyId})
                 Using rdr = cmd.ExecuteReader()
+                    Dim s = Function(i As Integer) If(rdr.IsDBNull(i), Nothing, rdr.GetString(i))
                     While rdr.Read()
-                        invites.Add((rdr.GetString(0), rdr.GetString(1), rdr.GetString(2)))
+                        invites.Add((rdr.GetString(0), rdr.GetString(2), New MergeTags.Recipient With {
+                            .Email = rdr.GetString(1),
+                            .FirstName = s(3), .LastName = s(4), .Company = s(5), .IdNumber = s(6), .Password = s(7),
+                            .RespondentId = If(rdr.IsDBNull(8), CType(Nothing, Long?), rdr.GetInt64(8)),
+                            .Custom = If(rdr.IsDBNull(9), Nothing, JObject.Parse(rdr.GetString(9)))
+                        }))
                     End While
                 End Using
             End Using
@@ -323,22 +329,23 @@ Public Class FunctionsController
             ' are globally suppressed. Tracked separately from `errors` so
             ' the response counts are accurate (a skipped email is neither
             ' sent nor failed).
-            If Ownership.IsSuppressed(accountId, invite.email) Then
+            If Ownership.IsSuppressed(accountId, invite.R.Email) Then
                 skipped += 1
                 Continue For
             End If
 
-            Dim surveyUrl = $"{baseUrl}/take?sid={surveyId}&t={invite.token}"
-            Dim subject = ResolveTemplate(subjectTemplate, surveyTitle, invite.email, surveyUrl)
-            Dim bodyText = ResolveTemplate(bodyTemplate, surveyTitle, invite.email, surveyUrl)
+            Dim surveyUrl = $"{baseUrl}/take?sid={surveyId}&t={invite.Token}"
+            Dim subject = MergeTags.Resolve(subjectTemplate, surveyTitle, surveyUrl, invite.R)
+            Dim bodyText = MergeTags.Resolve(bodyTemplate, surveyTitle, surveyUrl, invite.R)
             Dim html = BuildReminderHtml(bodyText, surveyUrl)
 
             Try
-                Await ResendEmailService.SendAsync(invite.email, subject, html)
+                Await ResendEmailService.SendAsync(invite.R.Email, subject, html)
                 sent += 1
+                RecordReminder(invite.Id)
             Catch ex As Exception
                 errors.Add(New JObject From {
-                    {"email", invite.email},
+                    {"email", invite.R.Email},
                     {"error", ex.Message}
                 })
             End Try
@@ -355,7 +362,7 @@ Public Class FunctionsController
 
 
     Private Shared Function DefaultReminderBody() As String
-        Return "Hi," & vbLf & vbLf &
+        Return "Hi {{first_name|there}}," & vbLf & vbLf &
                "This is a friendly reminder that you haven't yet completed the survey: {{survey_title}}." & vbLf & vbLf &
                "Please take a few minutes to share your feedback:" & vbLf &
                "{{survey_link}}" & vbLf & vbLf &
@@ -363,19 +370,27 @@ Public Class FunctionsController
     End Function
 
 
-    Private Shared Function ResolveTemplate(template As String, title As String, email As String, link As String) As String
-        If String.IsNullOrEmpty(template) Then Return ""
-        Return template.
-            Replace("{{survey_title}}",     If(title, "Survey")).
-            Replace("{{recipient_email}}",  If(email, "")).
-            Replace("{{survey_link}}",      link)
-    End Function
+    ' Counts reminders per invite (replaces legacy's four fixed
+    ' DateRemSent..DateFourthRemSent columns).
+    Private Shared Sub RecordReminder(inviteId As String)
+        Using conn = Db.Open()
+            Using cmd = conn.CreateCommand()
+                cmd.CommandText = "
+                    UPDATE dbo.SurveyInvites
+                    SET reminder_count = reminder_count + 1, last_reminder_at = SYSUTCDATETIME(), updated_date = SYSUTCDATETIME()
+                    WHERE id = @id"
+                cmd.Parameters.Add(New SqlParameter("@id", SqlDbType.Char, 36) With {.Value = inviteId})
+                cmd.ExecuteNonQuery()
+            End Using
+        End Using
+    End Sub
 
 
     Private Shared Function BuildReminderHtml(bodyText As String, surveyUrl As String) As String
         ' HTML-escape the body, then linkify the survey URL token into a button.
         Dim escaped = System.Net.WebUtility.HtmlEncode(If(bodyText, ""))
-        Dim escapedUrl = Regex.Escape(surveyUrl)
+        ' The body is encoded, so look for the encoded URL (& becomes &amp;).
+        Dim escapedUrl = Regex.Escape(System.Net.WebUtility.HtmlEncode(surveyUrl))
         Dim button = $"<a href=""{System.Net.WebUtility.HtmlEncode(surveyUrl)}"" style=""display:inline-block;background:#1AA9D4;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:600;"">{System.Net.WebUtility.HtmlEncode(surveyUrl)}</a>"
         Dim withButton = Regex.Replace(escaped, escapedUrl, button)
 
