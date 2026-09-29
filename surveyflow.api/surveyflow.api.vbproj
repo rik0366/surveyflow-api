@@ -210,6 +210,11 @@
     <Compile Include="Areas\HelpPage\SampleGeneration\SampleDirection.vb" />
     <Compile Include="Areas\HelpPage\SampleGeneration\TextSample.vb" />
     <Compile Include="Areas\HelpPage\XmlDocumentationProvider.vb" />
+    <Compile Include="Controllers\ContactController.vb" />
+    <Compile Include="Controllers\ContactGroupController.vb" />
+    <Compile Include="Controllers\ContactFieldController.vb" />
+    <Compile Include="Controllers\ContactNoteController.vb" />
+    <Compile Include="Services\ContactService.vb" />
     <Compile Include="Controllers\AuthController.vb" />
     <Compile Include="Controllers\EmailBlacklistController.vb" />
     <Compile Include="Controllers\FunctionsController.vb" />
