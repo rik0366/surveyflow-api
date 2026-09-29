@@ -151,11 +151,18 @@ Public Class AuthController
         Dim id = Guid.NewGuid().ToString()
         Dim hash = PasswordHasher.Hash(req.Password)
 
+        ' The first user is PeriscopeIQ staff: system admin in the default
+        ' account (created here on a brand-new database).
         Using conn = Db.Open()
             Using cmd = conn.CreateCommand()
                 cmd.CommandText = "
-                    INSERT INTO dbo.Users (id, email, password_hash, full_name, role, is_active, created_by)
-                    VALUES (@id, @email, @hash, @full_name, 'admin', 1, @email)"
+                    IF NOT EXISTS (SELECT 1 FROM dbo.Accounts WHERE slug = N'periscopeiq')
+                        INSERT INTO dbo.Accounts (id, name, slug, created_by)
+                        VALUES (LOWER(CONVERT(CHAR(36), NEWID())), N'PeriscopeIQ', N'periscopeiq', @email);
+
+                    INSERT INTO dbo.Users (id, email, password_hash, full_name, role, is_active, created_by, account_id, is_system_admin)
+                    VALUES (@id, @email, @hash, @full_name, 'admin', 1, @email,
+                            (SELECT id FROM dbo.Accounts WHERE slug = N'periscopeiq'), 1)"
                 cmd.Parameters.Add(New SqlParameter("@id",        SqlDbType.Char,     36) With {.Value = id})
                 cmd.Parameters.Add(New SqlParameter("@email",     SqlDbType.NVarChar, 320) With {.Value = req.Email})
                 cmd.Parameters.Add(New SqlParameter("@hash",      SqlDbType.NVarChar, 255) With {.Value = hash})
@@ -174,12 +181,10 @@ Public Class AuthController
 
     <HttpPost, Route("auth/invite-user"), Authorize>
     Public Async Function InviteUser(<FromBody> req As JObject) As Task(Of IHttpActionResult)
-        ' Caller must be admin.
-        Dim callerEmail = If(HttpContext.Current?.User?.Identity?.Name, "")
-        Dim caller = LookupUser(callerEmail)
-        If caller Is Nothing OrElse caller.Value(Of String)("role") <> "admin" Then
-            Return StatusCode(HttpStatusCode.Forbidden)
-        End If
+        ' Caller must be an admin of the account the new user joins.
+        CurrentUser.RequireAccountAdmin()
+        Dim callerEmail = CurrentUser.Email()
+        Dim accountId = CurrentUser.AccountId()
 
         If req Is Nothing Then Return BadRequest("Request body is required.")
         Dim email = req.Value(Of String)("email")
@@ -201,6 +206,10 @@ Public Class AuthController
             ' If they've already activated (have a password), refuse.
             Dim hashTok = existing("password_hash")
             If hashTok IsNot Nothing AndAlso hashTok.Type <> JTokenType.Null AndAlso Not String.IsNullOrEmpty(hashTok.ToString()) Then
+                Return Conflict()
+            End If
+            ' A pending invite from another account can't be taken over.
+            If Not String.Equals(existing.Value(Of String)("account_id"), accountId, StringComparison.OrdinalIgnoreCase) Then
                 Return Conflict()
             End If
             ' Refresh the invite for an existing un-activated user.
@@ -229,9 +238,9 @@ Public Class AuthController
                 Using cmd = conn.CreateCommand()
                     cmd.CommandText = "
                         INSERT INTO dbo.Users
-                            (id, email, role, is_active, invite_token, invite_token_expires, full_name, created_by)
+                            (id, email, role, is_active, invite_token, invite_token_expires, full_name, created_by, account_id)
                         VALUES
-                            (@id, @email, @role, 1, @t, @e, @fn, @createdBy)"
+                            (@id, @email, @role, 1, @t, @e, @fn, @createdBy, @acct)"
                     cmd.Parameters.Add(New SqlParameter("@id",        SqlDbType.Char,     36)  With {.Value = userId})
                     cmd.Parameters.Add(New SqlParameter("@email",     SqlDbType.NVarChar, 320) With {.Value = email})
                     cmd.Parameters.Add(New SqlParameter("@role",      SqlDbType.NVarChar, 20)  With {.Value = role})
@@ -239,6 +248,7 @@ Public Class AuthController
                     cmd.Parameters.Add(New SqlParameter("@e",         SqlDbType.DateTime2)     With {.Value = expires})
                     cmd.Parameters.Add(New SqlParameter("@fn",        SqlDbType.NVarChar, 200) With {.Value = If(CObj(fullName), DBNull.Value)})
                     cmd.Parameters.Add(New SqlParameter("@createdBy", SqlDbType.NVarChar, 320) With {.Value = callerEmail})
+                    cmd.Parameters.Add(New SqlParameter("@acct",      SqlDbType.Char,     36)  With {.Value = accountId})
                     cmd.ExecuteNonQuery()
                 End Using
             End Using
@@ -352,10 +362,12 @@ Public Class AuthController
         Using conn = Db.Open()
             Using cmd = conn.CreateCommand()
                 cmd.CommandText = "
-                    SELECT id, email, password_hash, full_name, role, is_active,
-                           created_date, created_by, updated_date
-                    FROM dbo.Users
-                    WHERE email = @email"
+                    SELECT u.id, u.email, u.password_hash, u.full_name, u.role, u.is_active,
+                           u.created_date, u.created_by, u.updated_date,
+                           u.account_id, a.name AS account_name, u.is_system_admin
+                    FROM dbo.Users u
+                    LEFT JOIN dbo.Accounts a ON a.id = u.account_id
+                    WHERE u.email = @email"
                 cmd.Parameters.Add(New SqlParameter("@email", SqlDbType.NVarChar, 320) With {.Value = email})
                 Using rdr = cmd.ExecuteReader()
                     If Not rdr.Read() Then Return Nothing

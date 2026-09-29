@@ -19,6 +19,10 @@ Imports Newtonsoft.Json.Linq
 '
 ' Both filter keys and sort keys are validated against the entity's
 ' whitelist — any field not whitelisted raises ArgumentException.
+'
+' Every public method takes a RepoScope. For account-scoped entities a
+' scoped call adds "account_id = @acct" to reads/updates/deletes and stamps
+' account_id on inserts, so a row in another account behaves as not found.
 Public Class JsonRepository
 
     Private ReadOnly _entity As EntityDescriptor
@@ -30,9 +34,9 @@ Public Class JsonRepository
 
     ' --- Read --------------------------------------------------------------
 
-    Public Function Find(filter As JObject, sort As String, limit As Integer?) As JArray
+    Public Function Find(filter As JObject, sort As String, limit As Integer?, scope As RepoScope) As JArray
         Dim params As New List(Of SqlParameter)
-        Dim whereClause = BuildWhere(filter, params)
+        Dim whereClause = BuildWhere(filter, params, scope)
         Dim orderBy = BuildOrderBy(sort)
         Dim top = If(limit.HasValue AndAlso limit.Value > 0, $"TOP ({limit.Value})", "")
 
@@ -53,10 +57,10 @@ Public Class JsonRepository
         Return out
     End Function
 
-    Public Function GetById(id As String) As JObject
+    Public Function GetById(id As String, scope As RepoScope) As JObject
         Using conn = Db.Open()
             Using cmd = conn.CreateCommand()
-                cmd.CommandText = $"SELECT * FROM dbo.{_entity.TableName} WHERE id = @id"
+                cmd.CommandText = $"SELECT * FROM dbo.{_entity.TableName} WHERE id = @id{ScopeAnd(scope, cmd)}"
                 cmd.Parameters.Add(New SqlParameter("@id", SqlDbType.Char, 36) With {.Value = id})
                 Using rdr = cmd.ExecuteReader()
                     If rdr.Read() Then Return RowToJson(rdr)
@@ -69,7 +73,7 @@ Public Class JsonRepository
 
     ' --- Write -------------------------------------------------------------
 
-    Public Function Create(data As JObject, createdBy As String) As JObject
+    Public Function Create(data As JObject, createdBy As String, scope As RepoScope) As JObject
         Dim id = data.Value(Of String)("id")
         If String.IsNullOrEmpty(id) Then
             id = Guid.NewGuid().ToString()
@@ -108,6 +112,16 @@ Public Class JsonRepository
             params.Add(New SqlParameter(p, SqlDbType.NVarChar, -1) With {.Value = data.ToString(Formatting.None)})
         End If
 
+        ' account_id always comes from the scope, never from the payload.
+        If _entity.AccountScoped Then
+            If scope.IsUnscoped Then
+                Throw New InvalidOperationException($"Creating a {_entity.TableName} row requires an account scope.")
+            End If
+            cols.Add("account_id")
+            placeholders.Add("@account_id")
+            params.Add(New SqlParameter("@account_id", SqlDbType.Char, 36) With {.Value = scope.AccountId})
+        End If
+
         cols.Add("created_by")
         placeholders.Add("@created_by")
         params.Add(New SqlParameter("@created_by", SqlDbType.NVarChar, 320) With {
@@ -124,10 +138,11 @@ Public Class JsonRepository
             End Using
         End Using
 
-        Return GetById(id)
+        Return GetById(id, scope)
     End Function
 
-    Public Function Update(id As String, data As JObject) As JObject
+    ' Returns Nothing when the row doesn't exist in scope (nothing is written).
+    Public Function Update(id As String, data As JObject, scope As RepoScope) As JObject
         Dim sets As New List(Of String)
         Dim params As New List(Of SqlParameter) From {New SqlParameter("@id", SqlDbType.Char, 36) With {.Value = id}}
 
@@ -152,7 +167,7 @@ Public Class JsonRepository
         ' Catch-all: merge incoming fields with whatever's already stored
         ' so a partial PUT doesn't blow away the rest of the object.
         If Not String.IsNullOrEmpty(_entity.CatchAllJsonColumn) Then
-            Dim merged = MergeCatchAll(id, data)
+            Dim merged = MergeCatchAll(id, data, scope)
             Dim p = "@" & _entity.CatchAllJsonColumn
             sets.Add($"{_entity.CatchAllJsonColumn} = {p}")
             params.Add(New SqlParameter(p, SqlDbType.NVarChar, -1) With {.Value = merged.ToString(Formatting.None)})
@@ -160,36 +175,34 @@ Public Class JsonRepository
 
         sets.Add("updated_date = SYSUTCDATETIME()")
 
-        Dim sql = $"UPDATE dbo.{_entity.TableName} SET {String.Join(", ", sets)} WHERE id = @id"
-
         Using conn = Db.Open()
             Using cmd = conn.CreateCommand()
-                cmd.CommandText = sql
+                cmd.CommandText = $"UPDATE dbo.{_entity.TableName} SET {String.Join(", ", sets)} WHERE id = @id{ScopeAnd(scope, cmd)}"
                 cmd.Parameters.AddRange(params.ToArray())
                 cmd.ExecuteNonQuery()
             End Using
         End Using
 
-        Return GetById(id)
+        Return GetById(id, scope)
     End Function
 
-    Public Function Delete(id As String) As Boolean
+    Public Function Delete(id As String, scope As RepoScope) As Boolean
         Using conn = Db.Open()
             Using cmd = conn.CreateCommand()
-                cmd.CommandText = $"DELETE FROM dbo.{_entity.TableName} WHERE id = @id"
+                cmd.CommandText = $"DELETE FROM dbo.{_entity.TableName} WHERE id = @id{ScopeAnd(scope, cmd)}"
                 cmd.Parameters.Add(New SqlParameter("@id", SqlDbType.Char, 36) With {.Value = id})
                 Return cmd.ExecuteNonQuery() > 0
             End Using
         End Using
     End Function
 
-    Public Function BulkCreate(items As JArray, createdBy As String) As JArray
+    Public Function BulkCreate(items As JArray, createdBy As String, scope As RepoScope) As JArray
         ' Naive loop is fine for typical invite batches; if we ever face huge
         ' batches we can switch to SqlBulkCopy or a TVP.
         Dim out As New JArray
         For Each item As JToken In items
             If TypeOf item Is JObject Then
-                out.Add(Create(CType(item, JObject), createdBy))
+                out.Add(Create(CType(item, JObject), createdBy, scope))
             End If
         Next
         Return out
@@ -205,6 +218,7 @@ Public Class JsonRepository
         For Each col In {"id", "created_date", "created_by", "updated_date"}
             obj(col) = ReadCell(rdr, col)
         Next
+        If _entity.AccountScoped Then obj("account_id") = ReadCell(rdr, "account_id")
 
         For Each sc In _entity.ScalarColumns
             obj(sc.JsonName) = ReadCell(rdr, sc.ColumnName)
@@ -242,11 +256,11 @@ Public Class JsonRepository
         Return obj
     End Function
 
-    Private Function MergeCatchAll(id As String, incoming As JObject) As JObject
+    Private Function MergeCatchAll(id As String, incoming As JObject, scope As RepoScope) As JObject
         Dim existing As JObject = Nothing
         Using conn = Db.Open()
             Using cmd = conn.CreateCommand()
-                cmd.CommandText = $"SELECT {_entity.CatchAllJsonColumn} FROM dbo.{_entity.TableName} WHERE id = @id"
+                cmd.CommandText = $"SELECT {_entity.CatchAllJsonColumn} FROM dbo.{_entity.TableName} WHERE id = @id{ScopeAnd(scope, cmd)}"
                 cmd.Parameters.Add(New SqlParameter("@id", SqlDbType.Char, 36) With {.Value = id})
                 Dim raw = TryCast(cmd.ExecuteScalar(), String)
                 If Not String.IsNullOrEmpty(raw) Then
@@ -290,52 +304,59 @@ Public Class JsonRepository
 
     ' --- Query string parsing ----------------------------------------------
 
-    Private Function BuildWhere(filter As JObject, params As List(Of SqlParameter)) As String
-        If filter Is Nothing OrElse filter.Count = 0 Then Return ""
-
+    Private Function BuildWhere(filter As JObject, params As List(Of SqlParameter), scope As RepoScope) As String
         Dim parts As New List(Of String)
+
+        If _entity.AccountScoped AndAlso Not scope.IsUnscoped Then
+            parts.Add("account_id = @acct")
+            params.Add(New SqlParameter("@acct", SqlDbType.Char, 36) With {.Value = scope.AccountId})
+        End If
+
         Dim idx = 0
-        For Each prop As JProperty In filter.Properties()
-            Dim col = prop.Name
-            If Not _entity.FilterableColumns.Contains(col) Then
-                Throw New ArgumentException($"Field '{col}' is not filterable on {_entity.TableName}.")
-            End If
-
-            Dim v = prop.Value
-            If TypeOf v Is JObject Then
-                Dim opObj = CType(v, JObject)
-                Dim inProp = opObj("$in")
-                If inProp IsNot Nothing AndAlso TypeOf inProp Is JArray Then
-                    Dim arr = CType(inProp, JArray)
-                    If arr.Count = 0 Then
-                        parts.Add("1 = 0")  ' empty IN matches nothing
-                    Else
-                        Dim placeholders As New List(Of String)
-                        For Each item In arr
-                            idx += 1
-                            Dim p = $"@p{idx}"
-                            placeholders.Add(p)
-                            params.Add(New SqlParameter(p, SqlDbType.NVarChar) With {
-                                .Value = item.ToObject(Of Object)()
-                            })
-                        Next
-                        parts.Add($"{col} IN ({String.Join(", ", placeholders)})")
-                    End If
-                Else
-                    Throw New ArgumentException($"Unsupported operator on field '{col}'. Only $in is supported.")
+        If filter IsNot Nothing Then
+            For Each prop As JProperty In filter.Properties()
+                Dim col = prop.Name
+                If Not _entity.FilterableColumns.Contains(col) Then
+                    Throw New ArgumentException($"Field '{col}' is not filterable on {_entity.TableName}.")
                 End If
-            ElseIf v Is Nothing OrElse v.Type = JTokenType.Null Then
-                parts.Add($"{col} IS NULL")
-            Else
-                idx += 1
-                Dim p = $"@p{idx}"
-                parts.Add($"{col} = {p}")
-                params.Add(New SqlParameter(p, SqlDbType.NVarChar) With {
-                    .Value = v.ToObject(Of Object)()
-                })
-            End If
-        Next
 
+                Dim v = prop.Value
+                If TypeOf v Is JObject Then
+                    Dim opObj = CType(v, JObject)
+                    Dim inProp = opObj("$in")
+                    If inProp IsNot Nothing AndAlso TypeOf inProp Is JArray Then
+                        Dim arr = CType(inProp, JArray)
+                        If arr.Count = 0 Then
+                            parts.Add("1 = 0")  ' empty IN matches nothing
+                        Else
+                            Dim placeholders As New List(Of String)
+                            For Each item In arr
+                                idx += 1
+                                Dim p = $"@p{idx}"
+                                placeholders.Add(p)
+                                params.Add(New SqlParameter(p, SqlDbType.NVarChar) With {
+                                    .Value = item.ToObject(Of Object)()
+                                })
+                            Next
+                            parts.Add($"{col} IN ({String.Join(", ", placeholders)})")
+                        End If
+                    Else
+                        Throw New ArgumentException($"Unsupported operator on field '{col}'. Only $in is supported.")
+                    End If
+                ElseIf v Is Nothing OrElse v.Type = JTokenType.Null Then
+                    parts.Add($"{col} IS NULL")
+                Else
+                    idx += 1
+                    Dim p = $"@p{idx}"
+                    parts.Add($"{col} = {p}")
+                    params.Add(New SqlParameter(p, SqlDbType.NVarChar) With {
+                        .Value = v.ToObject(Of Object)()
+                    })
+                End If
+            Next
+        End If
+
+        If parts.Count = 0 Then Return ""
         Return "WHERE " & String.Join(" AND ", parts)
     End Function
 
@@ -350,6 +371,14 @@ Public Class JsonRepository
         End If
 
         Return "ORDER BY " & col & If(desc, " DESC", " ASC")
+    End Function
+
+    ' " AND account_id = @acct" (and adds the parameter) when the scope
+    ' applies to this entity; "" otherwise.
+    Private Function ScopeAnd(scope As RepoScope, cmd As SqlCommand) As String
+        If Not _entity.AccountScoped OrElse scope.IsUnscoped Then Return ""
+        cmd.Parameters.Add(New SqlParameter("@acct", SqlDbType.Char, 36) With {.Value = scope.AccountId})
+        Return " AND account_id = @acct"
     End Function
 
 End Class

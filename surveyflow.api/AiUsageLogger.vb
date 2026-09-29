@@ -19,10 +19,13 @@ Public Module AiUsageLogger
                     cmd.CommandText = "
                         INSERT INTO dbo.AiUsage
                             (id, user_email, survey_id, endpoint, model,
-                             prompt_tokens, completion_tokens, total_tokens, success)
+                             prompt_tokens, completion_tokens, total_tokens, success, account_id)
                         VALUES
                             (@id, @user, @sid, @ep, @model,
-                             @pt, @ct, @tt, @ok)"
+                             @pt, @ct, @tt, @ok,
+                             -- Bill the survey's account; fall back to the user's.
+                             COALESCE((SELECT account_id FROM dbo.Surveys WHERE id = @sid),
+                                      (SELECT account_id FROM dbo.Users   WHERE email = @user)))"
                     cmd.Parameters.Add(New SqlParameter("@id",    SqlDbType.Char,     36)  With {.Value = Guid.NewGuid().ToString()})
                     cmd.Parameters.Add(New SqlParameter("@user",  SqlDbType.NVarChar, 320) With {.Value = If(String.IsNullOrEmpty(userEmail), CObj(DBNull.Value), userEmail)})
                     cmd.Parameters.Add(New SqlParameter("@sid",   SqlDbType.Char,     36)  With {.Value = If(String.IsNullOrEmpty(surveyId), CObj(DBNull.Value), surveyId)})

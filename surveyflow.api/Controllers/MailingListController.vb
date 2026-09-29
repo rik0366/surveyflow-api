@@ -4,6 +4,7 @@ Imports Newtonsoft.Json.Linq
 
 ' REST endpoints for MailingList entity. Mirrors the Base44 SDK's
 ' entities.MailingList.{list, get, filter, create, update, delete, bulkCreate}.
+' All calls are limited to the caller's account.
 '
 ' Routes:
 '   GET    /api/MailingList?filter=...&sort=...&limit=N
@@ -27,33 +28,31 @@ Public Class MailingListController
         If Not String.IsNullOrEmpty(filter) Then
             filterObj = JObject.Parse(filter)
         End If
-        Return Repo.Find(filterObj, sort, limit)
+        Return Repo.Find(filterObj, sort, limit, CurrentUser.Scope())
     End Function
 
     <HttpGet, Route("MailingList/{id}")>
     Public Function GetOne(id As String) As IHttpActionResult
-        Dim row = Repo.GetById(id)
+        Dim row = Repo.GetById(id, CurrentUser.Scope())
         If row Is Nothing Then Return NotFound()
         Return Ok(row)
     End Function
 
     <HttpPost, Route("MailingList")>
     Public Function Create(<FromBody> data As JObject) As JObject
-        ' TODO: replace "anonymous" with the authenticated user's email once
-        ' the AuthController is in place.
-        Return Repo.Create(data, CreatedBy())
+        Return Repo.Create(data, CurrentUser.Email(), CurrentUser.Scope())
     End Function
 
     <HttpPut, Route("MailingList/{id}")>
     Public Function Update(id As String, <FromBody> data As JObject) As IHttpActionResult
-        Dim row = Repo.Update(id, data)
+        Dim row = Repo.Update(id, data, CurrentUser.Scope())
         If row Is Nothing Then Return NotFound()
         Return Ok(row)
     End Function
 
     <HttpDelete, Route("MailingList/{id}")>
     Public Function Delete(id As String) As IHttpActionResult
-        If Repo.Delete(id) Then
+        If Repo.Delete(id, CurrentUser.Scope()) Then
             Return StatusCode(HttpStatusCode.NoContent)
         End If
         Return NotFound()
@@ -61,12 +60,7 @@ Public Class MailingListController
 
     <HttpPost, Route("MailingList/bulk")>
     Public Function Bulk(<FromBody> items As JArray) As JArray
-        Return Repo.BulkCreate(items, CreatedBy())
-    End Function
-
-
-    Private Function CreatedBy() As String
-        Return CurrentUser.Email()
+        Return Repo.BulkCreate(items, CurrentUser.Email(), CurrentUser.Scope())
     End Function
 
 End Class

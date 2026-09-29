@@ -38,12 +38,8 @@ Public Class UsageController
 
     <HttpGet, Route("admin/usage-report")>
     Public Function UsageReport(Optional [from] As String = Nothing, Optional [to] As String = Nothing) As IHttpActionResult
-        ' Admin-only
-        Dim callerEmail = If(System.Web.HttpContext.Current?.User?.Identity?.Name, "")
-        Dim role = LookupRole(callerEmail)
-        If Not String.Equals(role, "admin", StringComparison.OrdinalIgnoreCase) Then
-            Return StatusCode(HttpStatusCode.Forbidden)
-        End If
+        ' PeriscopeIQ staff only — this report spans every account.
+        CurrentUser.RequireSystemAdmin()
 
         ' Date range. Default: previous 30 days.
         Dim toDate As DateTime
@@ -145,17 +141,6 @@ Public Class UsageController
         Dim pt = row.Value(Of Long?)("prompt_tokens").GetValueOrDefault()
         Dim ct = row.Value(Of Long?)("completion_tokens").GetValueOrDefault()
         Return Math.Round(pt * promptRate / 1000000.0 + ct * completionRate / 1000000.0, 4)
-    End Function
-
-    Private Shared Function LookupRole(email As String) As String
-        If String.IsNullOrEmpty(email) Then Return ""
-        Using conn = Db.Open()
-            Using cmd = conn.CreateCommand()
-                cmd.CommandText = "SELECT role FROM dbo.Users WHERE email = @e"
-                cmd.Parameters.Add(New SqlParameter("@e", SqlDbType.NVarChar, 320) With {.Value = email})
-                Return TryCast(cmd.ExecuteScalar(), String)
-            End Using
-        End Using
     End Function
 
     Private Shared Function LoadUserAggregates(fromInclusive As DateTime, toExclusive As DateTime) As List(Of JObject)

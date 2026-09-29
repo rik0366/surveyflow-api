@@ -27,20 +27,6 @@ Imports Newtonsoft.Json.Linq
 Public Class FunctionsController
     Inherits ApiController
 
-    Private Shared ReadOnly BlacklistRepo As New JsonRepository(EntityRegistry.EmailBlacklist)
-
-    ' Returns True when (owner, email) is in the EmailBlacklist table —
-    ' the send paths use this to silently skip opted-out recipients.
-    ' Comparison is case-insensitive (matches the unique index collation).
-    Private Shared Function IsBlacklisted(ownerEmail As String, recipientEmail As String) As Boolean
-        If String.IsNullOrEmpty(ownerEmail) OrElse String.IsNullOrEmpty(recipientEmail) Then Return False
-        Dim filter = New JObject From {
-            {"owner_user_email", ownerEmail},
-            {"email", recipientEmail}
-        }
-        Dim hits = BlacklistRepo.Find(filter, "", 1)
-        Return hits IsNot Nothing AndAlso hits.Count > 0
-    End Function
 
     ' --- getQuestionStats -------------------------------------------------
     ' Aggregates completed responses for a single question and returns stats
@@ -273,19 +259,19 @@ Public Class FunctionsController
         Dim subjectTemplate = If(req.Value(Of String)("subject_template"), "Reminder: {{survey_title}}")
         Dim bodyTemplate = If(req.Value(Of String)("body_template"), DefaultReminderBody())
 
-        ' Fetch the survey (title, status, owner).
+        ' Fetch the survey (title, status) — only from the caller's account.
+        Dim accountId = CurrentUser.AccountId()
         Dim surveyTitle As String = Nothing
         Dim surveyStatus As String = Nothing
-        Dim surveyOwner  As String = Nothing
         Using conn = Db.Open()
             Using cmd = conn.CreateCommand()
-                cmd.CommandText = "SELECT title, status, created_by FROM dbo.Surveys WHERE id = @id"
+                cmd.CommandText = "SELECT title, status FROM dbo.Surveys WHERE id = @id AND account_id = @acct"
                 cmd.Parameters.Add(New SqlParameter("@id", SqlDbType.Char, 36) With {.Value = surveyId})
+                cmd.Parameters.Add(New SqlParameter("@acct", SqlDbType.Char, 36) With {.Value = accountId})
                 Using rdr = cmd.ExecuteReader()
                     If rdr.Read() Then
                         surveyTitle  = If(rdr.IsDBNull(0), "", rdr.GetString(0))
                         surveyStatus = If(rdr.IsDBNull(1), "", rdr.GetString(1))
-                        surveyOwner  = If(rdr.IsDBNull(2), "", rdr.GetString(2))
                     End If
                 End Using
             End Using
@@ -307,7 +293,8 @@ Public Class FunctionsController
                     SELECT id, email, token
                     FROM dbo.SurveyInvites
                     WHERE survey_id = @sid
-                      AND status NOT IN ('pending', 'completed')"
+                      AND status NOT IN ('pending', 'completed')
+                      AND email IS NOT NULL"
                 cmd.Parameters.Add(New SqlParameter("@sid", SqlDbType.Char, 36) With {.Value = surveyId})
                 Using rdr = cmd.ExecuteReader()
                     While rdr.Read()
@@ -332,10 +319,11 @@ Public Class FunctionsController
         Dim errors As New JArray
 
         For Each invite In invites
-            ' Skip recipients who've opted out of this survey owner's emails.
-            ' Tracked separately from `errors` so the response counts are
-            ' accurate (a skipped email is neither sent nor failed).
-            If IsBlacklisted(surveyOwner, invite.email) Then
+            ' Skip recipients who've opted out of this account's emails or
+            ' are globally suppressed. Tracked separately from `errors` so
+            ' the response counts are accurate (a skipped email is neither
+            ' sent nor failed).
+            If Ownership.IsSuppressed(accountId, invite.email) Then
                 skipped += 1
                 Continue For
             End If
@@ -407,11 +395,11 @@ Public Class FunctionsController
         If String.IsNullOrEmpty(subject) Then Return BadRequest("'subject' is required.")
         If String.IsNullOrEmpty(html) Then Return BadRequest("'html' is required.")
 
-        ' Blacklist check — silently skip recipients who've opted out of
-        ' this owner's emails. Returns 200 with status="skipped" so the
-        ' caller can count it as not-failed but also not-sent.
-        Dim ownerEmail = CurrentUser.Email()
-        If IsBlacklisted(ownerEmail, toAddress) Then
+        ' Suppression check — silently skip recipients who've opted out of
+        ' this account's emails or are globally suppressed. Returns 200 with
+        ' status="skipped" so the caller can count it as not-failed but also
+        ' not-sent.
+        If Ownership.IsSuppressed(CurrentUser.AccountId(), toAddress) Then
             Return Ok(New JObject From {
                 {"status", "skipped"},
                 {"reason", "blacklisted"},

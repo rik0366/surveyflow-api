@@ -147,7 +147,7 @@ Public Class IntegrationsController
                     Dim attribEmail = If(System.Web.HttpContext.Current?.User?.Identity?.Name, "")
                     If String.IsNullOrEmpty(attribEmail) AndAlso Not String.IsNullOrEmpty(surveyId) Then
                         Try
-                            Dim s = SurveyRepo.GetById(surveyId)
+                            Dim s = SurveyRepo.GetById(surveyId, RepoScope.Unscoped)
                             attribEmail = If(s?.Value(Of String)("created_by"), "")
                         Catch
                         End Try
@@ -199,7 +199,7 @@ Public Class IntegrationsController
 
     Private Shared Function IsAiEnabledForSurvey(surveyId As String) As Boolean
         Try
-            Dim survey = SurveyRepo.GetById(surveyId)
+            Dim survey = SurveyRepo.GetById(surveyId, RepoScope.Unscoped)
             If survey Is Nothing Then Return False
             Dim settings = survey("settings")
             If settings Is Nothing OrElse settings.Type <> JTokenType.Object Then Return False

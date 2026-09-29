@@ -97,7 +97,7 @@ Public Class JobsController
             Try
                 Dim survey As JObject = Nothing
                 If Not surveyCache.TryGetValue(c.SurveyId, survey) Then
-                    survey = SurveyRepo.GetById(c.SurveyId)
+                    survey = SurveyRepo.GetById(c.SurveyId, RepoScope.Unscoped)
                     surveyCache(c.SurveyId) = survey
                 End If
 
