@@ -1,0 +1,22 @@
+# Build artifacts
+bin/
+obj/
+publish/
+*.user
+
+# NuGet
+packages/
+
+# Per-environment configuration — never commit
+**/secrets.config
+**/connectionStrings.config
+
+# OS / IDE
+.vs/
+*.suo
+Thumbs.db
+.DS_Store
+
+# User-uploaded files (runtime data, not source)
+**/uploads/*
+!**/uploads/.gitkeep

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Template. Copy to connectionStrings.config and fill in real values for
+  the environment you're setting up.
+-->
+<connectionStrings>
+  <add name="SurveyFlow"
+       connectionString="Server=YOUR_SQL_SERVER;Database=SurveyFlow;User ID=YOUR_USER;Password=YOUR_PASSWORD;Connection Timeout=80;TrustServerCertificate=True;Application Name=SurveyFlow.Api"
+       providerName="System.Data.SqlClient" />
+</connectionStrings>
