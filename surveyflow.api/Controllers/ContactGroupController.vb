@@ -78,6 +78,34 @@ Public Class ContactGroupController
         Return out
     End Function
 
+    ' Current group memberships of the contacts invited to a survey — lets
+    ' results be filtered / segmented / cross-tabbed by group (legacy did
+    ' this with Results → Respondant → Address_Groups).
+    ' → [{ contact_id, group_id, group_name }]
+    <HttpGet, Route("ContactGroup/memberships")>
+    Public Function MembershipsForSurvey(survey_id As String) As IHttpActionResult
+        If Not Ownership.SurveyInCallerAccount(survey_id) Then Return NotFound()
+        Dim out As New JArray
+        Using conn = Db.Open()
+            Using cmd = conn.CreateCommand()
+                cmd.CommandText = "
+                    SELECT DISTINCT m.contact_id, g.id, g.name
+                    FROM dbo.SurveyInvites i
+                    JOIN dbo.ContactGroupMembers m ON m.contact_id = i.contact_id
+                    JOIN dbo.ContactGroups g ON g.id = m.group_id AND g.is_active = 1 AND g.account_id = @a
+                    WHERE i.survey_id = @s AND i.account_id = @a"
+                cmd.Parameters.Add(New SqlParameter("@s", SqlDbType.Char, 36) With {.Value = survey_id})
+                cmd.Parameters.Add(New SqlParameter("@a", SqlDbType.Char, 36) With {.Value = CurrentUser.AccountId()})
+                Using rdr = cmd.ExecuteReader()
+                    While rdr.Read()
+                        out.Add(New JObject From {{"contact_id", rdr.GetString(0)}, {"group_id", rdr.GetString(1)}, {"group_name", rdr.GetString(2)}})
+                    End While
+                End Using
+            End Using
+        End Using
+        Return Ok(out)
+    End Function
+
     <HttpGet, Route("ContactGroup/{id}")>
     Public Function GetOne(id As String) As IHttpActionResult
         Dim row = List(include_inactive:=True).OfType(Of JObject)().FirstOrDefault(Function(g) g.Value(Of String)("id") = id)
