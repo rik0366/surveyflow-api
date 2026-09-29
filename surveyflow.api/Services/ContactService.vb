@@ -304,6 +304,7 @@ Public Module ContactService
                 End Using
 
                 If emailChanged Then SyncInviteEmail(conn, tx, accountId, id, v.Email)
+                RefreshPendingInvites(conn, tx, accountId, id, v, fields)
 
                 Dim changes = DescribeChanges(current, merged, wasActive, isActive)
                 If changes IsNot Nothing Then AddSystemNote(conn, tx, accountId, id, changes, userEmail)
@@ -465,6 +466,7 @@ Public Module ContactService
                             cmd.ExecuteNonQuery()
                         End Using
                         SyncInviteEmail(conn, tx, accountId, up.Id, up.V.Email)
+                        RefreshPendingInvites(conn, tx, accountId, up.Id, up.V, fields)
                         AddSystemNote(conn, tx, accountId, up.Id, "Updated by import — " & up.Changes, userEmail)
                     Next
                     If groupId IsNot Nothing Then groupAdded = AddMemberships(conn, tx, {groupId}, memberIds, userEmail)
@@ -649,6 +651,53 @@ Public Module ContactService
             cmd.Parameters.Add(New SqlParameter("@a", SqlDbType.Char, 36) With {.Value = accountId})
             cmd.ExecuteNonQuery()
         End Using
+    End Sub
+
+    ' Invites copy the contact's details when created, so reports stay stable
+    ' once people have been emailed. Invites not yet sent (status 'pending')
+    ' are refreshed instead, so fixing a typo before sending reaches the email.
+    ' Custom values follow the same per-survey field rules as invite creation.
+    Private Sub RefreshPendingInvites(conn As SqlConnection, tx As SqlTransaction, accountId As String, contactId As String,
+                                      v As ContactValues, fields As Dictionary(Of String, FieldDef))
+        Dim pending As New List(Of (Id As String, SurveyId As String))
+        Using cmd = conn.CreateCommand()
+            cmd.Transaction = tx
+            cmd.CommandText = "SELECT id, survey_id FROM dbo.SurveyInvites WHERE contact_id = @c AND account_id = @a AND status = 'pending'"
+            cmd.Parameters.Add(New SqlParameter("@c", SqlDbType.Char, 36) With {.Value = contactId})
+            cmd.Parameters.Add(New SqlParameter("@a", SqlDbType.Char, 36) With {.Value = accountId})
+            Using rdr = cmd.ExecuteReader()
+                While rdr.Read()
+                    pending.Add((rdr.GetString(0), rdr.GetString(1)))
+                End While
+            End Using
+        End Using
+
+        For Each inv In pending
+            Dim snapshot As New JObject
+            For Each f In fields.Values
+                If f.SurveyIds IsNot Nothing AndAlso Not f.SurveyIds.Contains(inv.SurveyId) Then Continue For
+                Dim val = v.Custom?(f.Key)
+                If val IsNot Nothing AndAlso val.Type <> JTokenType.Null Then snapshot(f.Key) = val
+            Next
+            Using cmd = conn.CreateCommand()
+                cmd.Transaction = tx
+                cmd.CommandText = "
+                    UPDATE dbo.SurveyInvites
+                    SET first_name = @fn, last_name = @ln, company = @co, custom_id = @idn, custom_json = @cj,
+                        updated_date = SYSUTCDATETIME()
+                    WHERE id = @id AND status = 'pending'"
+                Dim s = Function(x As String) If(CObj(x), DBNull.Value)
+                cmd.Parameters.Add(New SqlParameter("@fn", SqlDbType.NVarChar, 100) With {.Value = s(v.FirstName)})
+                cmd.Parameters.Add(New SqlParameter("@ln", SqlDbType.NVarChar, 100) With {.Value = s(v.LastName)})
+                cmd.Parameters.Add(New SqlParameter("@co", SqlDbType.NVarChar, 200) With {.Value = s(v.Company)})
+                cmd.Parameters.Add(New SqlParameter("@idn", SqlDbType.NVarChar, 100) With {.Value = s(v.IdNumber)})
+                cmd.Parameters.Add(New SqlParameter("@cj", SqlDbType.NVarChar, -1) With {
+                    .Value = If(snapshot.Count = 0, CObj(DBNull.Value), snapshot.ToString(Formatting.None))
+                })
+                cmd.Parameters.Add(New SqlParameter("@id", SqlDbType.Char, 36) With {.Value = inv.Id})
+                cmd.ExecuteNonQuery()
+            End Using
+        Next
     End Sub
 
     Public Sub AddSystemNote(conn As SqlConnection, tx As SqlTransaction, accountId As String, contactId As String,

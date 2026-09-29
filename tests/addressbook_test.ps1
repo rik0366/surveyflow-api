@@ -179,6 +179,15 @@ $r = (Call $b POST '/SurveyInvite/from-contacts' @{ survey_id = $survey.id; grou
 Check 'random_count picks N of the not-yet-invited' ($r.created -eq 1 -and $r.eligible -ge 1)
 Call $b PUT "/Contact/$($pat2.id)" @{ email = 'pat.new@x.com' } | Out-Null
 Check 'email change flows to unfinished invite' ((Sql "SELECT email FROM SurveyInvites WHERE id='$($inv.id)'") -eq 'pat.new@x.com')
+Call $b PUT "/Contact/$($pat2.id)" @{ first_name = 'Patricia'; custom = @{ region = 'West' } } | Out-Null
+Check 'edit refreshes pending invite (name + custom)' ((Sql "SELECT first_name FROM SurveyInvites WHERE id='$($inv.id)'") -eq 'Patricia' -and (Sql "SELECT JSON_VALUE(custom_json,'$.region') FROM SurveyInvites WHERE id='$($inv.id)'") -eq 'West')
+Check 'refresh keeps survey-scoped fields out' ($null -eq (Sql "SELECT JSON_VALUE(custom_json,'$.years_of_service') FROM SurveyInvites WHERE id='$($inv.id)'") -or [DBNull]::Value -eq (Sql "SELECT JSON_VALUE(custom_json,'$.years_of_service') FROM SurveyInvites WHERE id='$($inv.id)'"))
+$newInv = Sql "SELECT id FROM SurveyInvites WHERE survey_id='$($survey.id)' AND email='new1@x.com'"
+Call $b POST '/Contact/import' @{ rows = @(@{ email = 'new1@x.com'; company = 'NewCo Renamed' }) } | Out-Null
+Check 'import refreshes pending invite' ((Sql "SELECT company FROM SurveyInvites WHERE id='$newInv'") -eq 'NewCo Renamed')
+Call $b PUT "/SurveyInvite/$($inv.id)" @{ status = 'sent'; sent_at = (Get-Date).ToUniversalTime().ToString('o') } | Out-Null
+Call $b PUT "/Contact/$($pat2.id)" @{ last_name = 'Changed-After-Send' } | Out-Null
+Check 'sent invite keeps its snapshot' ((Sql "SELECT last_name FROM SurveyInvites WHERE id='$($inv.id)'") -eq 'Lee-Updated')
 Check 'A cannot invite to B survey (404)' ((Call $sys POST '/SurveyInvite/from-contacts' @{ survey_id = $survey.id; group_ids = @($g2.id) }).Status -eq 404)
 $aSurvey = (Call $sys POST '/Survey' @{ title = 'A pulse' }).Json
 Check 'B group ignored for A survey' ((Call $sys POST '/SurveyInvite/from-contacts' @{ survey_id = $aSurvey.id; group_ids = @($g2.id) }).Json.created -eq 0)
