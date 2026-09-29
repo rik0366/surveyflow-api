@@ -99,7 +99,7 @@ Public Class JsonRepository
                 cols.Add(jc.ColumnName)
                 Dim p = "@" & jc.ColumnName
                 placeholders.Add(p)
-                params.Add(New SqlParameter(p, SqlDbType.NVarChar, -1) With {.Value = v.ToString(Formatting.None)})
+                params.Add(JsonParam(p, v))
             End If
         Next
 
@@ -160,7 +160,7 @@ Public Class JsonRepository
             If v IsNot Nothing Then
                 Dim p = "@" & jc.ColumnName
                 sets.Add($"{jc.ColumnName} = {p}")
-                params.Add(New SqlParameter(p, SqlDbType.NVarChar, -1) With {.Value = v.ToString(Formatting.None)})
+                params.Add(JsonParam(p, v))
             End If
         Next
 
@@ -279,6 +279,13 @@ Public Class JsonRepository
         Return existing
     End Function
 
+    ' JSON null clears the column (writing the text "null" would fail the
+    ' ISJSON check constraints).
+    Private Shared Function JsonParam(name As String, v As JToken) As SqlParameter
+        Return New SqlParameter(name, SqlDbType.NVarChar, -1) With {
+            .Value = If(v.Type = JTokenType.Null, CObj(DBNull.Value), v.ToString(Formatting.None))
+        }
+    End Function
     Private Shared Function ReadCell(rdr As SqlDataReader, col As String) As JToken
         Dim ord = rdr.GetOrdinal(col)
         If rdr.IsDBNull(ord) Then Return JValue.CreateNull()

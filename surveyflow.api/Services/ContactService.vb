@@ -241,11 +241,34 @@ Public Module ContactService
                 For Each k In {"first_name", "last_name", "email", "id_number", "company"}
                     If body(k) IsNot Nothing Then merged(k) = body(k)
                 Next
-                If body("custom") IsNot Nothing Then merged("custom") = body("custom")
+
+                ' Custom values merge key by key: keys sent replace (null or ""
+                ' removes), keys not sent are kept — including values for
+                ' fields that have since been deactivated. Only the keys sent
+                ' are validated.
+                Dim customOut = If(TryCast(current("custom"), JObject)?.DeepClone(), New JObject)
+                Dim incoming = TryCast(body("custom"), JObject)
+                Dim customIn As New JObject
+                If incoming IsNot Nothing Then
+                    For Each prop In incoming.Properties()
+                        Dim raw = If(prop.Value.Type = JTokenType.Null, Nothing, Clean(prop.Value.ToString()))
+                        If raw Is Nothing Then
+                            CType(customOut, JObject).Remove(prop.Name)
+                        Else
+                            customIn(prop.Name) = prop.Value
+                        End If
+                    Next
+                End If
 
                 Dim v = FromJson(merged)
+                v.Custom = customIn
                 Dim p = Problem(v, mode, fields)
                 If p IsNot Nothing Then Throw New ContactRuleException("invalid", p)
+                For Each prop In customIn.Properties()
+                    CType(customOut, JObject)(prop.Name) = prop.Value
+                Next
+                v.Custom = CType(customOut, JObject)
+                merged("custom") = customOut
 
                 Dim oldEmail = Clean(current.Value(Of String)("email"))
                 Dim emailChanged = Not String.Equals(oldEmail, v.Email, StringComparison.OrdinalIgnoreCase)
@@ -305,7 +328,8 @@ Public Module ContactService
                 parts.Add($"{k.Replace("_", " ")}: '{If(a, "")}' → '{If(b, "")}'")
             End If
         Next
-        If Not JToken.DeepEquals(If(before("custom"), JValue.CreateNull()), If(after("custom"), JValue.CreateNull())) Then parts.Add("custom fields updated")
+        Dim customOf = Function(o As JObject) If(TryCast(o("custom"), JObject), New JObject)
+        If Not JToken.DeepEquals(customOf(before), customOf(after)) Then parts.Add("custom fields updated")
         If wasActive AndAlso Not isActive Then parts.Add("deactivated")
         If Not wasActive AndAlso isActive Then parts.Add("reactivated")
         If parts.Count = 0 Then Return Nothing

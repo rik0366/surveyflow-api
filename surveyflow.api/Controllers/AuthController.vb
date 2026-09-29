@@ -364,7 +364,7 @@ Public Class AuthController
                 cmd.CommandText = "
                     SELECT u.id, u.email, u.password_hash, u.full_name, u.role, u.is_active,
                            u.created_date, u.created_by, u.updated_date,
-                           u.account_id, a.name AS account_name, u.is_system_admin
+                           u.account_id, a.name AS account_name, a.contact_match_key, u.is_system_admin
                     FROM dbo.Users u
                     LEFT JOIN dbo.Accounts a ON a.id = u.account_id
                     WHERE u.email = @email"
