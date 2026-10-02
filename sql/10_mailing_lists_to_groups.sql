@@ -66,9 +66,13 @@ BEGIN
     FROM OPENJSON(ISNULL(@emails, '[]')) j
     WHERE j.type = 1 AND LTRIM(RTRIM(CAST(j.value AS NVARCHAR(320)))) <> '';
 
-    -- Invalid (same shape check the API's regex enforces: x@y.z, no spaces).
+    -- Invalid (same shape check the API's regex enforces: x@y.z, no
+    -- whitespace). Tabs and line breaks matter: lists were sometimes filled
+    -- by pasting whole spreadsheet rows ("first<TAB>last<TAB>email<TAB>title").
     UPDATE @E SET status = 'invalid'
-    WHERE email NOT LIKE '%_@_%._%' OR email LIKE '% %' OR email LIKE '%@%@%';
+    WHERE email NOT LIKE '%_@_%._%' OR email LIKE '%@%@%'
+       OR email LIKE '% %' OR email LIKE '%' + CHAR(9) + '%'
+       OR email LIKE '%' + CHAR(10) + '%' OR email LIKE '%' + CHAR(13) + '%';
 
     -- Suppressed: global list or this account's opt-outs.
     UPDATE e SET status = 'suppressed'

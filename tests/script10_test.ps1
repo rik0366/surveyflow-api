@@ -52,5 +52,10 @@ Sql "INSERT MailingLists(id,name,emails_json,created_by,account_id) VALUES ('ml-
 $rep3 = @(RunScript)
 Check 'late list converted, reuses existing contact, free name' ($rep3[0].matched_existing -eq 1 -and $rep3[0].group_name -eq 'Volunteers (mailing list)')
 
+"pasted spreadsheet rows (tabs)"
+Sql "INSERT MailingLists(id,name,emails_json,created_by,account_id) VALUES ('ml-b-tabs','Pasted rows','[""samantha\trosenberg\tsrosenberg@aacc.org\tdirector"",""line@x.com\nnext@x.com""]','badmin@test.local','$acctB')" | Out-Null
+$rep4 = @(RunScript)
+Check 'tab / newline entries are invalid, no junk contact' ($rep4[0].skipped_invalid -eq 2 -and $rep4[0].new_contacts -eq 0 -and (Sql "SELECT COUNT(*) FROM Contacts WHERE email LIKE '%'+CHAR(9)+'%' OR email LIKE '%'+CHAR(10)+'%'") -eq 0)
+
 ""
 if ($script:fails -eq 0) { "ALL PASSED" } else { "$($script:fails) FAILED" }
