@@ -80,6 +80,10 @@ Check 'include_inactive shows it' ((Call $b GET '/Contact/search?include_inactiv
 $pat2 = (Call $b POST '/Contact' @{ email = 'pat.lee@x.com'; first_name = 'Pat2' }).Json
 Check 're-add same email after deactivation' ($pat2.id -and $pat2.id -ne $pat.id)
 Check 'reactivating old one -> 409 duplicate' ((Call $b PUT "/Contact/$($pat.id)" @{ is_active = $true }).Status -eq 409)
+Sql "INSERT Contacts(id,account_id,email,match_key) VALUES ('bad-row','$acctB','a'+CHAR(9)+'b@x.com'+CHAR(9)+'title','junk')" | Out-Null
+Check 'bad record can still be deactivated' ((Call $b DELETE '/Contact/bad-row').Status -eq 200 -and (Sql "SELECT is_active FROM Contacts WHERE id='bad-row'") -eq $false)
+Check 'bad record cannot be reactivated as-is (400)' ((Call $b PUT '/Contact/bad-row' @{ is_active = $true }).Status -eq 400)
+Sql "DELETE FROM ContactNotes WHERE contact_id='bad-row'; DELETE FROM Contacts WHERE id='bad-row'" | Out-Null
 
 # --- custom fields -------------------------------------------------------------
 "custom fields"

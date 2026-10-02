@@ -262,7 +262,13 @@ Public Module ContactService
 
                 Dim v = FromJson(merged)
                 v.Custom = customIn
-                Dim p = Problem(v, mode, fields)
+                ' Deactivating alone never needs valid data — a bad record
+                ' (e.g. a migrated row) must always be removable. Any change
+                ' to its details, or bringing it back, is validated.
+                Dim valuesSent = {"first_name", "last_name", "email", "id_number", "company", "custom"}.Any(Function(k) body(k) IsNot Nothing)
+                Dim reactivating = body("is_active") IsNot Nothing AndAlso body("is_active").Type <> JTokenType.Null AndAlso
+                                   body.Value(Of Boolean)("is_active") AndAlso Not current.Value(Of Boolean)("is_active")
+                Dim p = If(valuesSent OrElse reactivating, Problem(v, mode, fields), Nothing)
                 If p IsNot Nothing Then Throw New ContactRuleException("invalid", p)
                 For Each prop In customIn.Properties()
                     CType(customOut, JObject)(prop.Name) = prop.Value
