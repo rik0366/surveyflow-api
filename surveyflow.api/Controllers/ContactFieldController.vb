@@ -43,7 +43,7 @@ Public Class ContactFieldController
         If data("field_type") Is Nothing Then data("field_type") = "text"
         data.Remove("is_active")
 
-        Dim bad = Validate(data)
+        Dim bad = ValidateField(data)
         If bad IsNot Nothing Then Return BadRequest(bad)
         Try
             Return Ok(Repo.Create(data, CurrentUser.Email(), CurrentUser.Scope()))
@@ -70,7 +70,7 @@ Public Class ContactFieldController
         ' Validate the field as it will look after the update.
         Dim merged = CType(current.DeepClone(), JObject)
         merged.Merge(data)
-        Dim bad = Validate(merged)
+        Dim bad = ValidateField(merged)
         If bad IsNot Nothing Then Return BadRequest(bad)
         Return Ok(Repo.Update(id, data, CurrentUser.Scope()))
     End Function
@@ -82,7 +82,7 @@ Public Class ContactFieldController
         Return StatusCode(HttpStatusCode.NoContent)
     End Function
 
-    Private Shared Function Validate(f As JObject) As String
+    Private Shared Function ValidateField(f As JObject) As String
         Dim t = f.Value(Of String)("field_type")
         If Not Types.Contains(t) Then Return "'field_type' must be text, number, date or choice."
         If t = "choice" Then
