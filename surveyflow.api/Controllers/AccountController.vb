@@ -145,6 +145,72 @@ Public Class AccountController
     End Function
 
 
+    ' Users across accounts for User Management. account_id = "all" or an id.
+    <HttpGet, Route("admin/users")>
+    Public Function Users(Optional account_id As String = "all") As JArray
+        CurrentUser.RequireSystemAdmin()
+        Dim all = String.IsNullOrEmpty(account_id) OrElse account_id = "all"
+        Dim out As New JArray
+        Using conn = Db.Open()
+            Using cmd = conn.CreateCommand()
+                cmd.CommandText = "
+                    SELECT u.id, u.email, u.full_name, u.role, u.is_active, u.is_system_admin, u.created_date,
+                           u.account_id, a.name, CASE WHEN u.password_hash IS NULL THEN 1 ELSE 0 END AS invite_pending
+                    FROM dbo.Users u
+                    LEFT JOIN dbo.Accounts a ON a.id = u.account_id
+                    WHERE (@all = 1 OR u.account_id = @a)
+                    ORDER BY a.name, u.email"
+                cmd.Parameters.Add(New SqlParameter("@all", SqlDbType.Bit) With {.Value = all})
+                cmd.Parameters.Add(New SqlParameter("@a", SqlDbType.Char, 36) With {.Value = If(all, CObj(DBNull.Value), account_id)})
+                Using rdr = cmd.ExecuteReader()
+                    While rdr.Read()
+                        out.Add(New JObject From {
+                            {"id", rdr.GetString(0)},
+                            {"email", rdr.GetString(1)},
+                            {"full_name", If(rdr.IsDBNull(2), Nothing, rdr.GetString(2))},
+                            {"role", rdr.GetString(3)},
+                            {"is_active", rdr.GetBoolean(4)},
+                            {"is_system_admin", rdr.GetBoolean(5)},
+                            {"created_date", rdr.GetDateTime(6)},
+                            {"account_id", If(rdr.IsDBNull(7), Nothing, rdr.GetString(7))},
+                            {"account_name", If(rdr.IsDBNull(8), Nothing, rdr.GetString(8))},
+                            {"invite_pending", rdr.GetInt32(9) = 1}
+                        })
+                    End While
+                End Using
+            End Using
+        End Using
+        Return out
+    End Function
+
+    ' Move a user to another client account. Their surveys etc. stay where
+    ' they are (those belong to the account, not the person).
+    <HttpPut, Route("admin/users/{id}/account")>
+    Public Function MoveUser(id As String, <FromBody> data As JObject) As IHttpActionResult
+        CurrentUser.RequireSystemAdmin()
+        Dim target = ContactService.Clean(data?.Value(Of String)("account_id"))
+        If target Is Nothing Then Return BadRequest("'account_id' is required.")
+        If String.Equals(id, CurrentUser.Info().Id, StringComparison.OrdinalIgnoreCase) Then Return BadRequest("You can't move yourself.")
+        Using conn = Db.Open()
+            Using cmd = conn.CreateCommand()
+                cmd.CommandText = "SELECT COUNT(*) FROM dbo.Accounts WHERE id = @a AND is_active = 1"
+                cmd.Parameters.Add(New SqlParameter("@a", SqlDbType.Char, 36) With {.Value = target})
+                If CInt(cmd.ExecuteScalar()) = 0 Then Return BadRequest("Unknown or inactive client.")
+            End Using
+            Using cmd = conn.CreateCommand()
+                ' Someone moved out of PeriscopeIQ must not keep staff powers.
+                cmd.CommandText = "
+                    UPDATE dbo.Users SET account_id = @a, is_system_admin = 0, updated_date = SYSUTCDATETIME()
+                    WHERE id = @id"
+                cmd.Parameters.Add(New SqlParameter("@a", SqlDbType.Char, 36) With {.Value = target})
+                cmd.Parameters.Add(New SqlParameter("@id", SqlDbType.Char, 36) With {.Value = id})
+                If cmd.ExecuteNonQuery() = 0 Then Return NotFound()
+            End Using
+        End Using
+        Return Ok(Users(target).OfType(Of JObject)().First(Function(u) u.Value(Of String)("id") = id))
+    End Function
+
+
     ' --- helpers ----------------------------------------------------------
 
     Private Function NameConflict(name As String) As IHttpActionResult

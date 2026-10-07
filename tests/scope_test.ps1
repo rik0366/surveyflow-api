@@ -150,6 +150,22 @@ Check 'create client (slug generated)' ($hc.Status -eq 200 -and $hc.Json.slug -e
 Check 'duplicate client name -> 409' ((Call $sys POST '/admin/accounts' @{ name = 'healthcare council test' }).Status -eq 409)
 Check 'new survey goes to the client via X-Account-Id' ((Call $sys POST '/Survey' @{ title = 'HC pulse' } @{ 'X-Account-Id' = $hc.Json.id }).Json.account_id -eq $hc.Json.id)
 Check 'cannot deactivate own account (400)' ((Call $sys PUT "/admin/accounts/$acctA" @{ is_active = $false }).Status -eq 400)
+"client users"
+Sql "DELETE FROM Users WHERE email IN ('hc.user@test.local','bad.invite@test.local')" | Out-Null
+$inv = Call $sys POST '/auth/invite-user' @{ email = 'hc.user@test.local'; role = 'admin'; account_id = $hc.Json.id }
+Check 'system admin invites straight into a client' (($inv.Status -eq 200 -or $inv.Status -eq 206) -and (Sql "SELECT account_id FROM Users WHERE email='hc.user@test.local'") -eq $hc.Json.id) "status $($inv.Status) $($inv.Raw)"
+Check 'invited client user is not staff' ((Sql "SELECT is_system_admin FROM Users WHERE email='hc.user@test.local'") -eq $false)
+Check 'account admin cannot invite into another client (403)' ((Call $bAdmin POST '/auth/invite-user' @{ email = 'bad.invite@test.local'; account_id = $hc.Json.id }).Status -eq 403)
+Check 'invite into unknown client (400)' ((Call $sys POST '/auth/invite-user' @{ email = 'bad.invite@test.local'; account_id = 'nope' }).Status -eq 400)
+$ulist = (Call $sys GET "/admin/users?account_id=$($hc.Json.id)").Json
+Check 'admin/users lists the client user, invite pending' (@($ulist).Count -eq 1 -and $ulist[0].email -eq 'hc.user@test.local' -and $ulist[0].invite_pending -eq $true -and $ulist[0].account_name -eq 'Healthcare Council Test')
+Check 'account admin cannot list all users (403)' ((Call $bAdmin GET '/admin/users').Status -eq 403)
+$hcUserId = $ulist[0].id
+Check 'edit user via X-Account-Id of their client' ((Call $sys PUT "/User/$hcUserId" @{ full_name = 'HC User' } @{ 'X-Account-Id' = $hc.Json.id }).Status -eq 200)
+$mv = Call $sys PUT "/admin/users/$hcUserId/account" @{ account_id = $acctB }
+Check 'move user to another client' ($mv.Status -eq 200 -and (Sql "SELECT account_id FROM Users WHERE id='$hcUserId'") -eq $acctB)
+Check 'cannot move yourself (400)' ((Call $sys PUT "/admin/users/$sysId/account" @{ account_id = $acctB }).Status -eq 400)
+Sql "DELETE FROM Users WHERE email IN ('hc.user@test.local','bad.invite@test.local')" | Out-Null
 Sql "DELETE FROM Surveys WHERE account_id='$($hc.Json.id)'; DELETE FROM Accounts WHERE id='$($hc.Json.id)'" | Out-Null
 
 # --- deactivated user --------------------------------------------------------

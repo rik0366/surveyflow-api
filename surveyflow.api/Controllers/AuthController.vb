@@ -181,10 +181,17 @@ Public Class AuthController
 
     <HttpPost, Route("auth/invite-user"), Authorize>
     Public Async Function InviteUser(<FromBody> req As JObject) As Task(Of IHttpActionResult)
-        ' Caller must be an admin of the account the new user joins.
+        ' Caller must be an admin of the account the new user joins. System
+        ' admins may name any active client account with "account_id".
         CurrentUser.RequireAccountAdmin()
         Dim callerEmail = CurrentUser.Email()
         Dim accountId = CurrentUser.AccountId()
+        Dim requested = req?.Value(Of String)("account_id")
+        If Not String.IsNullOrWhiteSpace(requested) AndAlso Not String.Equals(requested, accountId, StringComparison.OrdinalIgnoreCase) Then
+            If Not CurrentUser.Info().IsSystemAdmin Then Return StatusCode(HttpStatusCode.Forbidden)
+            If Not AccountIsActive(requested) Then Return BadRequest("Unknown or inactive client.")
+            accountId = requested
+        End If
 
         If req Is Nothing Then Return BadRequest("Request body is required.")
         Dim email = req.Value(Of String)("email")
@@ -383,6 +390,16 @@ Public Class AuthController
                     Next
                     Return obj
                 End Using
+            End Using
+        End Using
+    End Function
+
+    Private Shared Function AccountIsActive(accountId As String) As Boolean
+        Using conn = Db.Open()
+            Using cmd = conn.CreateCommand()
+                cmd.CommandText = "SELECT COUNT(*) FROM dbo.Accounts WHERE id = @a AND is_active = 1"
+                cmd.Parameters.Add(New SqlParameter("@a", SqlDbType.Char, 36) With {.Value = accountId})
+                Return CInt(cmd.ExecuteScalar()) > 0
             End Using
         End Using
     End Function
