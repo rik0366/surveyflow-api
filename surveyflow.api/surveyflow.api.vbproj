@@ -215,6 +215,7 @@
     <Compile Include="Controllers\ContactFieldController.vb" />
     <Compile Include="Controllers\ContactNoteController.vb" />
     <Compile Include="Services\ContactService.vb" />
+    <Compile Include="Controllers\AccountController.vb" />
     <Compile Include="Controllers\AuthController.vb" />
     <Compile Include="Controllers\EmailBlacklistController.vb" />
     <Compile Include="Controllers\FunctionsController.vb" />

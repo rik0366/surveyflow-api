@@ -134,6 +134,24 @@ Check 'B admin cannot touch A user (404)' ((Call $bAdmin PUT "/User/$sysId" @{ f
 Check 'usage report: B admin forbidden (403)' ((Call $bAdmin GET '/admin/usage-report').Status -eq 403)
 Check 'usage report: system admin ok' ((Call $sys GET '/admin/usage-report').Status -eq 200)
 
+# --- client accounts (system admins) ----------------------------------------
+"clients"
+Check 'account admin cannot list clients (403)' ((Call $bAdmin GET '/admin/accounts').Status -eq 403)
+Check 'account admin cannot list all surveys (403)' ((Call $bAdmin GET '/admin/surveys').Status -eq 403)
+$accts = (Call $sys GET '/admin/accounts').Json
+Check 'system admin lists accounts, home flagged' (@($accts).Count -ge 2 -and (@($accts | Where-Object is_home)).Count -eq 1 -and ($accts | Where-Object is_home).id -eq $acctA)
+$all = (Call $sys GET '/admin/surveys?account_id=all').Json
+Check 'All view spans accounts with names' ((@($all | Where-Object id -eq $sB.id)).Count -eq 1 -and ($all | Where-Object id -eq $sB.id).account_name -eq 'Client B')
+$onlyB = (Call $sys GET "/admin/surveys?account_id=$acctB").Json
+Check 'single-client view' (@($onlyB).Count -ge 1 -and -not (@($onlyB) | Where-Object account_id -ne $acctB))
+Sql "DELETE FROM Surveys WHERE account_id IN (SELECT id FROM Accounts WHERE name='Healthcare Council Test'); DELETE FROM Accounts WHERE name='Healthcare Council Test'" | Out-Null
+$hc = Call $sys POST '/admin/accounts' @{ name = 'Healthcare Council Test' }
+Check 'create client (slug generated)' ($hc.Status -eq 200 -and $hc.Json.slug -eq 'healthcare-council-test')
+Check 'duplicate client name -> 409' ((Call $sys POST '/admin/accounts' @{ name = 'healthcare council test' }).Status -eq 409)
+Check 'new survey goes to the client via X-Account-Id' ((Call $sys POST '/Survey' @{ title = 'HC pulse' } @{ 'X-Account-Id' = $hc.Json.id }).Json.account_id -eq $hc.Json.id)
+Check 'cannot deactivate own account (400)' ((Call $sys PUT "/admin/accounts/$acctA" @{ is_active = $false }).Status -eq 400)
+Sql "DELETE FROM Surveys WHERE account_id='$($hc.Json.id)'; DELETE FROM Accounts WHERE id='$($hc.Json.id)'" | Out-Null
+
 # --- deactivated user --------------------------------------------------------
 Sql "UPDATE Users SET is_active=0 WHERE email='buser@test.local'" | Out-Null
 Check 'deactivated user with live cookie -> 401' ((Call $bUser GET '/Survey').Status -eq 401)
