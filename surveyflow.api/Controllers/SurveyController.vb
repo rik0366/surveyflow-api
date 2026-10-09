@@ -24,6 +24,8 @@ Public Class SurveyController
     Public Function GetOne(id As String) As IHttpActionResult
         Dim row = Repo.GetById(id, RepoScope.Unscoped)
         If row Is Nothing Then Return NotFound()
+        ' Client branding for the survey pages and invite emails.
+        row("account_logo_url") = AccountLogoController.LogoUrlFor(row.Value(Of String)("account_id"))
         Return Ok(row)
     End Function
 

@@ -28,7 +28,8 @@ Public Class AccountController
                 cmd.CommandText = "
                     SELECT a.id, a.name, a.slug, a.is_active, a.created_date,
                            (SELECT COUNT(*) FROM dbo.Surveys s WHERE s.account_id = a.id) AS survey_count,
-                           (SELECT COUNT(*) FROM dbo.Surveys s WHERE s.account_id = a.id AND s.status = 'active') AS active_count
+                           (SELECT COUNT(*) FROM dbo.Surveys s WHERE s.account_id = a.id AND s.status = 'active') AS active_count,
+                           JSON_VALUE(a.settings_json, '$.logo_url') AS logo_url
                     FROM dbo.Accounts a
                     ORDER BY a.name"
                 Using rdr = cmd.ExecuteReader()
@@ -41,6 +42,7 @@ Public Class AccountController
                             {"created_date", rdr.GetDateTime(4)},
                             {"survey_count", rdr.GetInt32(5)},
                             {"active_survey_count", rdr.GetInt32(6)},
+                            {"logo_url", If(rdr.IsDBNull(7), Nothing, rdr.GetString(7))},
                             {"is_home", String.Equals(rdr.GetString(0), home, StringComparison.OrdinalIgnoreCase)}
                         })
                     End While
