@@ -20,4 +20,16 @@ Public Module Db
         Return conn
     End Function
 
+    ' Legacy PIQ (PeriscopeIQ) database, read-only — used only by the
+    ' "Import from PIQ" survey importer. Optional: returns Nothing when the
+    ' "PIQ" connection string isn't configured, so nothing else in the API
+    ' depends on it.
+    Public Function OpenPiq() As SqlConnection
+        Dim entry = ConfigurationManager.ConnectionStrings("PIQ")
+        If entry Is Nothing OrElse String.IsNullOrWhiteSpace(entry.ConnectionString) Then Return Nothing
+        Dim conn As New SqlConnection(entry.ConnectionString)
+        conn.Open()
+        Return conn
+    End Function
+
 End Module

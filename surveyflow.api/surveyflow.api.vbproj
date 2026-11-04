@@ -217,6 +217,8 @@
     <Compile Include="Services\ContactService.vb" />
     <Compile Include="Controllers\AccountController.vb" />
     <Compile Include="Controllers\AccountLogoController.vb" />
+    <Compile Include="Controllers\PiqImportController.vb" />
+    <Compile Include="Services\PiqImportService.vb" />
     <Compile Include="Controllers\AuthController.vb" />
     <Compile Include="Controllers\EmailBlacklistController.vb" />
     <Compile Include="Controllers\FunctionsController.vb" />
