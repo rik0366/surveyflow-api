@@ -321,13 +321,13 @@ Public Class PiqImportService
         If kids.Count = 0 Then Warn(q, "is a grid with no rows.")
     End Sub
 
-    ' Checkbox grid → spreadsheet with a tick box per column.
+    ' Checkbox grid → multiple-choice grid (any number of ticks per row).
     Private Sub ConvertCheckboxGrid(q As DataRow, o As JObject, kids As List(Of DataRow))
-        o("type") = "spreadsheet"
-        o("spreadsheet_rows") = New JArray(kids.Select(Function(k) CleanText(Str(k, "QText"))).ToArray())
-        o("spreadsheet_columns") = New JArray(GridColumns(kids).Select(Function(c) New JObject From {
-            {"id", NewId()}, {"label", c}, {"cell_type", "checkbox"}, {"cell_options", New JArray()}}).ToArray())
+        o("type") = "grid_multi"
+        o("grid_rows") = New JArray(kids.Select(Function(k) CleanText(Str(k, "QText"))).ToArray())
+        o("grid_columns") = New JArray(GridColumns(kids).ToArray())
         GridRowOtherWarning(q, kids)
+        If kids.Count = 0 Then Warn(q, "is a grid with no rows.")
     End Sub
 
     Private Function GridColumns(kids As List(Of DataRow)) As List(Of String)
